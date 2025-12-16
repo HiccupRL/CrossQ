@@ -26,7 +26,7 @@ wait_for_available_gpus() {
 
 AGENT_PATH="train.py"
 RUN_GROUP="crossQ_exp"
-SEEDS=(0 1 2 3)
+SEEDS=(0 1)
 ENV_NAMES=("Humanoid-v3" "Humanoid-v4") 
 ALGO="crossq"
 WANDB_MODE="online"
@@ -77,7 +77,7 @@ for ((i=0;i<GPU_COUNT;i++)); do
     export LANGUAGE=C
     export XLA_PYTHON_CLIENT_PREALLOCATE=false
     if command -v parallel &> /dev/null; then
-      eval "printf '%s\\n' \"\${GPU_COMMANDS$i[@]}\"" | parallel -j2 --lb --tag 2>/dev/null
+      eval "printf '%s\\n' \"\${GPU_COMMANDS$i[@]}\"" | parallel -j4 --lb --tag 2>/dev/null
     else
       eval "commands=(\"\${GPU_COMMANDS$i[@]}\")"; for cmd in "${commands[@]}"; do echo "Executing: $cmd"; eval "$cmd"; done
     fi
