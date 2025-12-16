@@ -150,7 +150,7 @@ args_dict.update({
 with wandb.init(
     entity=args.wandb_entity,
     project=args.wandb_project,
-    name=f"seed={seed}",
+    name=f"{args.env}_seed={seed}",
     group=group,
     tags=[],
     sync_tensorboard=True,
