@@ -47,7 +47,6 @@ generate_command() {
 -seed ${seed} \
 -wandb_mode ${WANDB_MODE} \
 -wandb_project ${WANDB_PROJECT} \
--batch_size 512 \
 > ${log_name} 2>&1"
 }
 
