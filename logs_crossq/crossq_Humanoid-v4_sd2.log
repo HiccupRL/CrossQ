@@ -1,0 +1,17 @@
+/opt/conda/envs/crossq/lib/python3.11/site-packages/wandb/sdk/verify/verify.py:11: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+  from pkg_resources import parse_version
+wandb: Currently logged in as: hiccupwzy (hiccupnudt). Use `wandb login --relogin` to force relogin
+wandb: - Waiting for wandb.init()...wandb: \ Waiting for wandb.init()...wandb: Tracking run with wandb version 0.15.10
+wandb: Run data is saved locally in /tmp/wandb/run-20251216_031451-23tpvgz4
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run seed=2
+wandb: ⭐️ View project at https://wandb.ai/hiccupnudt/crossq
+wandb: 🚀 View run at https://wandb.ai/hiccupnudt/crossq/runs/23tpvgz4
+libEGL warning: egl: failed to create dri2 screen
+libEGL warning: egl: failed to create dri2 screen
+libEGL warning: egl: failed to create dri2 screen
+libEGL warning: egl: failed to create dri2 screen
+libEGL warning: egl: failed to create dri2 screen
+libEGL warning: egl: failed to create dri2 screen
+libEGL warning: egl: failed to create dri2 screen
+libEGL warning: egl: failed to create dri2 screen

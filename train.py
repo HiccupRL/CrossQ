@@ -24,9 +24,12 @@ from sbx.sac.utils import *
 import gymnasium as gym
 from shimmy.registration import DM_CONTROL_SUITE_ENVS
 
-
-os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
+os.environ['PYOPENGL_PLATFORM'] = 'egl'
+# Configure MuJoCo to use EGL renderer
+os.environ['MUJOCO_GL'] = 'egl'
+os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'true'
 os.environ['WANDB_DIR'] = '/tmp'
+os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.4'
 
 parser = argparse.ArgumentParser()
 parser.add_argument("-env",         type=str, required=False, default="HumanoidStandup-v4", help="Set Environment.")
