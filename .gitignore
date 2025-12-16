@@ -1,3 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Logs
+log*
+eval_logs/
+wandb/
+
+# Environment variables
+.env
+
+# IDEs
+.vscode/
+.idea/
+
+# System
+.DS_Store
+Thumbs.db
 *.swp
 *.pyc
 *.pkl
