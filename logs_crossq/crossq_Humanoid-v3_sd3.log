@@ -1,0 +1,21 @@
+/opt/conda/envs/crossq/lib/python3.11/site-packages/wandb/sdk/verify/verify.py:11: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+  from pkg_resources import parse_version
+wandb: Currently logged in as: hiccupwzy (hiccupnudt). Use `wandb login --relogin` to force relogin
+wandb: - Waiting for wandb.init()...wandb: \ Waiting for wandb.init()...wandb: Tracking run with wandb version 0.15.10
+wandb: Run data is saved locally in /tmp/wandb/run-20251216_031506-fuf33bfl
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run seed=3
+wandb: ⭐️ View project at https://wandb.ai/hiccupnudt/crossq
+wandb: 🚀 View run at https://wandb.ai/hiccupnudt/crossq/runs/fuf33bfl
+/opt/conda/envs/crossq/lib/python3.11/site-packages/gymnasium/envs/registration.py:513: DeprecationWarning: [33mWARN: The environment Humanoid-v3 is out of date. You should consider upgrading to version `v4`.[0m
+  logger.deprecation(
+libEGL warning: egl: failed to create dri2 screen
+libEGL warning: egl: failed to create dri2 screen
+libEGL warning: egl: failed to create dri2 screen
+libEGL warning: egl: failed to create dri2 screen
+libEGL warning: egl: failed to create dri2 screen
+libEGL warning: egl: failed to create dri2 screen
+libEGL warning: egl: failed to create dri2 screen
+libEGL warning: egl: failed to create dri2 screen
+/opt/conda/envs/crossq/lib/python3.11/site-packages/gymnasium/envs/mujoco/mujoco_env.py:211: DeprecationWarning: [33mWARN: This version of the mujoco environments depends on the mujoco-py bindings, which are no longer maintained and may stop working. Please upgrade to the v4 versions of the environments (which depend on the mujoco python bindings instead), unless you are trying to precisely replicate previous works).[0m
+  logger.deprecation(
