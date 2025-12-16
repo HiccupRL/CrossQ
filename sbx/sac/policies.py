@@ -494,23 +494,14 @@ class SACPolicy(BaseJaxPolicy):
         return BaseJaxPolicy.sample_action(self.actor_state, observation, self.noise_key, True)
 
     def predict_critic(self, observation: np.ndarray, action: np.ndarray) -> np.ndarray:
-
         if not self.use_sde:
             self.reset_noise()
 
-        def Q(params, batch_stats, o, a, dropout_key):
-            return self.qf_state.apply_fn(
-                {"params": params, "batch_stats": batch_stats},
-                o, a, 
-                rngs={"dropout": dropout_key},
-                train=False
-            ) 
-        
-        return jax.jit(Q)(
-            self.qf_state.params, 
-            self.qf_state.batch_stats, 
-            observation, 
+        return self.qf.apply(
+            {"params": self.qf_state.params, "batch_stats": self.qf_state.batch_stats},
+            observation,
             action,
-            self.noise_key,
+            rngs={"dropout": self.noise_key},
+            train=False
         )
 

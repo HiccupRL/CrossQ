@@ -195,11 +195,6 @@ class SAC(OffPolicyAlgorithmJax):
     def train(self, batch_size, gradient_steps):
         # Sample all at once for efficiency (so we can jit the for loop)
         data = self.replay_buffer.sample(batch_size * gradient_steps, env=self._vec_normalize_env)
-        # Pre-compute the indices where we need to update the actor
-        # This is a hack in order to jit the train loop
-        # It will compile once per value of policy_delay_indices
-        policy_delay_indices = {i: True for i in range(gradient_steps) if ((self._n_updates + i + 1) % self.policy_delay) == 0}
-        policy_delay_indices = flax.core.FrozenDict(policy_delay_indices)
 
         if isinstance(data.observations, dict):
             keys = list(self.observation_space.keys())
@@ -232,8 +227,9 @@ class SAC(OffPolicyAlgorithmJax):
             self.tau,
             self.target_entropy,
             gradient_steps,
+            self.policy_delay,
+            self._n_updates,
             data,
-            policy_delay_indices,
             self.policy.qf_state,
             self.policy.actor_state,
             self.ent_coef_state,
@@ -422,7 +418,7 @@ class SAC(OffPolicyAlgorithmJax):
         return ent_coef_state, ent_coef_loss
 
     @classmethod
-    @partial(jax.jit, static_argnames=["cls", "crossq_style", "td3_mode", "use_bnstats_from_live_net", "gradient_steps", "q_reduce_fn"])
+    @partial(jax.jit, static_argnames=["cls", "crossq_style", "td3_mode", "use_bnstats_from_live_net", "gradient_steps", "policy_delay", "q_reduce_fn"])
     def _train(
         cls,
         crossq_style: bool,
@@ -432,15 +428,16 @@ class SAC(OffPolicyAlgorithmJax):
         tau: float,
         target_entropy: np.ndarray,
         gradient_steps: int,
+        policy_delay: int,
+        update_step: int,
         data: ReplayBufferSamplesNp,
-        policy_delay_indices: flax.core.FrozenDict,
         qf_state: RLTrainState,
         actor_state: ActorTrainState,
         ent_coef_state: TrainState,
         key,
         q_reduce_fn,
     ):
-        actor_loss_value = jnp.array(0)
+        actor_loss_value = jnp.array(0.0)
 
         for i in range(gradient_steps):
 
@@ -468,20 +465,41 @@ class SAC(OffPolicyAlgorithmJax):
                 slice(data.dones),
                 key,
             )
-            qf_state = SAC.soft_update(tau, qf_state)
+            
+            # CrossQ: Remove target network, so soft update is not needed
+            if not crossq_style:
+                qf_state = SAC.soft_update(tau, qf_state)
 
-            # hack to be able to jit (n_updates % policy_delay == 0)
-            if i in policy_delay_indices:
-                (actor_state, qf_state, actor_loss_value, key, entropy) = cls.update_actor(
-                    actor_state,
-                    qf_state,
-                    ent_coef_state,
-                    slice(data.observations),
-                    key,
-                    q_reduce_fn,
-                    td3_mode,
+            # Use jax.lax.cond to avoid recompilation when policy_delay_indices change
+            should_update = ((update_step + i + 1) % policy_delay) == 0
+            
+            # Operands for cond
+            obs = slice(data.observations)
+            # We need to carry actor_loss_value to update it if needed, or preserve it
+            operands = (actor_state, qf_state, ent_coef_state, key, obs, actor_loss_value)
+            
+            def update_wrapper(ops):
+                (a_s, q_s, e_s, k, o, _) = ops
+                (new_a_s, new_q_s, loss, new_k, entropy) = cls.update_actor(
+                    a_s, q_s, e_s, o, k, q_reduce_fn, td3_mode
                 )
-                ent_coef_state, _ = SAC.update_temperature(target_entropy, ent_coef_state, entropy)
+                new_e_s, _ = SAC.update_temperature(target_entropy, e_s, entropy)
+                return new_a_s, new_q_s, new_e_s, new_k, loss
+            
+            def no_update_wrapper(ops):
+                (a_s, q_s, e_s, k, _, old_loss) = ops
+                # Return original states and old loss
+                return a_s, q_s, e_s, k, old_loss
+
+            if policy_delay == 1:
+                (actor_state, qf_state, ent_coef_state, key, actor_loss_value) = update_wrapper(operands)
+            else:
+                (actor_state, qf_state, ent_coef_state, key, actor_loss_value) = jax.lax.cond(
+                    should_update,
+                    update_wrapper,
+                    no_update_wrapper,
+                    operands
+                )
 
         log_metrics = {
             'actor_loss' : actor_loss_value,
