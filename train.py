@@ -158,8 +158,6 @@ with wandb.init(
     settings=wandb.Settings(start_method="fork") if is_slurm_job() else None,
     mode=args.wandb_mode
 ) as wandb_run:
-    wandb.define_metric("time/total_timesteps")
-    wandb.define_metric("*", step_metric="time/total_timesteps")
     
     # SLURM maintainance
     if is_slurm_job():
