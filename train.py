@@ -24,9 +24,9 @@ from sbx.sac.utils import *
 import gymnasium as gym
 from shimmy.registration import DM_CONTROL_SUITE_ENVS
 
-os.environ['PYOPENGL_PLATFORM'] = 'egl'
+os.environ.setdefault('PYOPENGL_PLATFORM', 'glfw')
 # Configure MuJoCo to use EGL renderer
-os.environ['MUJOCO_GL'] = 'egl'
+os.environ.setdefault('MUJOCO_GL', 'glfw')
 os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
 os.environ['WANDB_DIR'] = '/tmp'
 # os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.4'
