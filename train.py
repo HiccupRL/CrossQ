@@ -14,7 +14,7 @@ import rlax
 import flax.linen as nn
 
 from stable_baselines3.common import type_aliases
-from stable_baselines3.common.callbacks import EvalCallback, CallbackList, BaseCallback
+from stable_baselines3.common.callbacks import CallbackList, BaseCallback
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.vec_env import DummyVecEnv, VecEnv, VecMonitor, is_vecenv_wrapped, sync_envs_normalization
 from sbx import SAC
@@ -89,7 +89,7 @@ if 'dm_control' in args.env:
         'dm_control/finger-spin'      : 500_000,
         'dm_control/fish-swim'        : 5_000_000,
         'dm_control/humanoid-stand'   : 5_000_000,
-    }[args.env]
+    }.get(args.env, total_timesteps)
     eval_freq = max(total_timesteps // args.log_freq, 1)
 
 elif 'antmaze' in args.env:
@@ -175,7 +175,7 @@ with wandb.init(
 
     class AntMazeSuccessWrapper(gym.Wrapper):
         def step(self, action):
-            result = super().step(action)
+            result = self.env.step(action)
             if len(result) == 5:
                 obs, reward, terminated, truncated, info = result
             else:
@@ -192,18 +192,61 @@ with wandb.init(
             else:
                 return obs, reward, terminated, info
 
-    training_env = gym.make(args.env)
-    if 'antmaze' in args.env:
+    try:
+        import d4rl
+    except ImportError:
+        pass
+        
+    try:
+        import minari
+    except ImportError:
+        pass
+
+    try:
+        import d4rl
+    except ImportError:
+        pass
+
+    # Handle standard Gym and D4RL formats
+    env_id = args.env
+    if 'antmaze' in env_id and '-v' not in env_id:
+        env_id = env_id + '-v2' # default to v2 for D4RL
+
+    import gymnasium as gym
+    def make_env_fallback(env_id, **kwargs):
+        try:
+            return gym.make(env_id, **kwargs)
+        except gym.error.NameNotFound:
+            try:
+                import gym as gym_old
+                try:
+                    import d4rl
+                except ImportError:
+                    pass
+                return gym_old.make(env_id, **kwargs)
+            except Exception as e:
+                print(f"Error creating environment: {e}")
+                raise
+
+    training_env = make_env_fallback(env_id)
+
+    if 'antmaze' in env_id:
         training_env = AntMazeSuccessWrapper(training_env)
 
+    # Allow custom observation space adjustments
+    if hasattr(training_env, 'observation_space'):
+        obs_space = training_env.observation_space
+    else:
+        obs_space = training_env.env.observation_space
+
     if args.env == 'dm_control/humanoid-stand':
-        training_env.observation_space['head_height'] = gym.spaces.Box(-np.inf, np.inf, (1,))
+        obs_space['head_height'] = gym.spaces.Box(-np.inf, np.inf, (1,))
     if args.env == 'dm_control/fish-swim':
-        training_env.observation_space['upright'] = gym.spaces.Box(-np.inf, np.inf, (1,))
+        obs_space['upright'] = gym.spaces.Box(-np.inf, np.inf, (1,))
 
     import optax
     model = SAC(
-        "MultiInputPolicy" if isinstance(training_env.observation_space, gym.spaces.Dict) else "MlpPolicy",
+        "MultiInputPolicy" if isinstance(obs_space, gym.spaces.Dict) or isinstance(obs_space, dict) else "MlpPolicy",
         training_env,
         policy_kwargs=dict({
             'activation_fn': activation_fn[args.critic_activation],
@@ -246,8 +289,32 @@ with wandb.init(
 
     # Create callback that evaluates agent
     wrapper_class = AntMazeSuccessWrapper if 'antmaze' in args.env else None
+    
+    # Define a helper to wrap our env creator
+    def _make_eval_env():
+        env = make_env_fallback(env_id)
+        if wrapper_class is not None:
+            env = wrapper_class(env)
+        return env
+        
+    try:
+        gym.spec(env_id)
+        # Use string ID if registered properly in gymnasium
+        eval_env = make_vec_env(env_id, n_envs=1, seed=seed, wrapper_class=wrapper_class)
+        qbias_eval_env = make_vec_env(env_id, n_envs=1, seed=seed, wrapper_class=wrapper_class)
+    except Exception:
+        # Use DummyVecEnv with the creator function directly
+        eval_env = DummyVecEnv([_make_eval_env])
+        qbias_eval_env = DummyVecEnv([_make_eval_env])
+
+    # Ensure environments are wrapped with VecMonitor for evaluation
+    if not is_vecenv_wrapped(eval_env, VecMonitor):
+        eval_env = VecMonitor(eval_env)
+    if not is_vecenv_wrapped(qbias_eval_env, VecMonitor):
+        qbias_eval_env = VecMonitor(qbias_eval_env)
+
     eval_callback = EvalCallback(
-        make_vec_env(args.env, n_envs=1, seed=seed, wrapper_class=wrapper_class),
+        eval_env,
         jax_random_key_for_seeds=args.seed,
         best_model_save_path=None,
         log_path=eval_log_dir, eval_freq=eval_freq,
@@ -256,7 +323,7 @@ with wandb.init(
 
     # Callback that evaluates q bias according to the REDQ paper.
     q_bias_callback = CriticBiasCallback(
-        make_vec_env(args.env, n_envs=1, seed=seed, wrapper_class=wrapper_class), 
+        qbias_eval_env, 
         jax_random_key_for_seeds=args.seed,
         best_model_save_path=None,
         log_path=qbias_log_dir, eval_freq=eval_freq,
