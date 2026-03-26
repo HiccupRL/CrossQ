@@ -9,7 +9,14 @@ import numpy as np
 import optax
 import tensorflow_probability
 from flax.training.train_state import TrainState
-from gymnasium import spaces
+try:
+    import gymnasium as gym
+except ImportError:
+    import gym
+try:
+    from gymnasium import spaces
+except ImportError:
+    from gym import spaces
 from stable_baselines3.common.type_aliases import Schedule
 
 from sbx.common.distributions import TanhTransformedDistribution

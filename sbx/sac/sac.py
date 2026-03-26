@@ -8,7 +8,14 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 from flax.training.train_state import TrainState
-from gymnasium import spaces
+try:
+    import gymnasium as gym
+except ImportError:
+    import gym
+try:
+    from gymnasium import spaces
+except ImportError:
+    from gym import spaces
 from stable_baselines3.common.buffers import ReplayBuffer
 from stable_baselines3.common.noise import ActionNoise, NormalActionNoise
 from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback, Schedule
@@ -80,7 +87,59 @@ class SAC(OffPolicyAlgorithmJax):
         _init_setup_model: bool = True,
         stats_window_size: int = 100,
     ) -> None:
-        super().__init__(
+        # support both gym and gymnasium spaces to handle gym 0.21 fallback
+        try:
+            import gym as gym_old
+            try:
+                from gymnasium import spaces as gym_spaces
+                supported_action_spaces = (gym_spaces.Box,)
+            except ImportError:
+                supported_action_spaces = (gym_old.spaces.Box,)
+        except ImportError:
+            try:
+                from gymnasium import spaces as gym_spaces
+                supported_action_spaces = (gym_spaces.Box,)
+            except ImportError:
+                from gym import spaces as gym_spaces
+                supported_action_spaces = (gym_spaces.Box,)
+
+        # Additional fallback logic directly adding the specific action space instance's class
+        try:
+            if hasattr(env, 'action_space'):
+                action_space_class = type(env.action_space)
+                if action_space_class not in supported_action_spaces:
+                    pass
+        except Exception:
+            pass
+
+        # Temporarily patch BaseAlgorithm to allow fallback gym.spaces.Box
+        try:
+            from stable_baselines3.common.base_class import BaseAlgorithm
+            original_supported = getattr(BaseAlgorithm, 'SUPPORTED_ACTION_SPACES', None)
+            
+            # Combine the base supported spaces with our custom ones
+            if original_supported is not None:
+                new_supported = list(original_supported)
+                try:
+                    import gym as gym_old
+                    if gym_old.spaces.Box not in new_supported:
+                        new_supported.append(gym_old.spaces.Box)
+                except:
+                    pass
+                BaseAlgorithm.SUPPORTED_ACTION_SPACES = tuple(new_supported)
+            else:
+                BaseAlgorithm.SUPPORTED_ACTION_SPACES = supported_action_spaces
+        except:
+            original_supported = None
+
+        import inspect
+        try:
+            from sbx.common.off_policy_algorithm import OffPolicyAlgorithmJax
+            sig = inspect.signature(OffPolicyAlgorithmJax.__init__)
+        except:
+            sig = None
+        
+        kwargs = dict(
             policy=policy,
             env=env,
             learning_rate=learning_rate,
@@ -102,10 +161,17 @@ class SAC(OffPolicyAlgorithmJax):
             tensorboard_log=tensorboard_log,
             verbose=verbose,
             seed=seed,
-            supported_action_spaces=(spaces.Box,),
+            supported_action_spaces=supported_action_spaces,
             support_multi_env=True,
-            stats_window_size=stats_window_size,
         )
+        if sig is not None and 'stats_window_size' in sig.parameters:
+            kwargs['stats_window_size'] = stats_window_size
+
+        try:
+            super().__init__(**kwargs)
+        finally:
+            if original_supported is not None:
+                BaseAlgorithm.SUPPORTED_ACTION_SPACES = original_supported
 
         self.policy_delay = policy_delay
         self.ent_coef_init = ent_coef

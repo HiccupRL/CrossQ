@@ -7,7 +7,10 @@ import jax.numpy as jnp
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import numpy as np
 
-import gymnasium as gym
+try:
+    import gymnasium as gym
+except ImportError:
+    import gym
 import jax
 import os
 import rlax

@@ -1,10 +1,20 @@
 from typing import Any, Optional
 
 import jax.numpy as jnp
+try:
+    import gymnasium as gym
+except ImportError:
+    import gym
 import tensorflow_probability
 
 tfp = tensorflow_probability.substrates.jax
 tfd = tfp.distributions
+
+try:
+    from gymnasium import spaces
+except ImportError:
+    from gym import spaces
+from stable_baselines3.common.distributions import Distribution
 
 
 class TanhTransformedDistribution(tfd.TransformedDistribution):  # type: ignore[name-defined]

@@ -234,6 +234,19 @@ with wandb.init(
 
     training_env = make_env_fallback(env_id)
 
+    # Standardize to gymnasium spaces if using old gym to bypass SB3 check
+    try:
+        from gymnasium import spaces as gym_spaces
+        import gym as gym_old
+        if isinstance(training_env.action_space, gym_old.spaces.Box):
+            old_as = training_env.action_space
+            training_env.action_space = gym_spaces.Box(low=old_as.low, high=old_as.high, shape=old_as.shape, dtype=old_as.dtype)
+        if isinstance(training_env.observation_space, gym_old.spaces.Box):
+            old_os = training_env.observation_space
+            training_env.observation_space = gym_spaces.Box(low=old_os.low, high=old_os.high, shape=old_os.shape, dtype=old_os.dtype)
+    except:
+        pass
+
     if 'antmaze' in env_id:
         training_env = AntMazeSuccessWrapper(training_env)
 
@@ -244,13 +257,31 @@ with wandb.init(
         obs_space = training_env.env.observation_space
 
     if args.env == 'dm_control/humanoid-stand':
-        obs_space['head_height'] = gym.spaces.Box(-np.inf, np.inf, (1,))
+        try:
+            obs_space['head_height'] = gym.spaces.Box(-np.inf, np.inf, (1,))
+        except:
+            import gym as gym_old
+            obs_space['head_height'] = gym_old.spaces.Box(-np.inf, np.inf, (1,))
     if args.env == 'dm_control/fish-swim':
-        obs_space['upright'] = gym.spaces.Box(-np.inf, np.inf, (1,))
+        try:
+            obs_space['upright'] = gym.spaces.Box(-np.inf, np.inf, (1,))
+        except:
+            import gym as gym_old
+            obs_space['upright'] = gym_old.spaces.Box(-np.inf, np.inf, (1,))
 
     import optax
+    try:
+        from gymnasium import spaces as gym_spaces
+        is_dict = isinstance(obs_space, gym_spaces.Dict) or isinstance(obs_space, dict)
+    except:
+        try:
+            import gym as gym_old
+            is_dict = isinstance(obs_space, gym_old.spaces.Dict) or isinstance(obs_space, dict)
+        except:
+            is_dict = isinstance(obs_space, dict)
+
     model = SAC(
-        "MultiInputPolicy" if isinstance(obs_space, gym.spaces.Dict) or isinstance(obs_space, dict) else "MlpPolicy",
+        "MultiInputPolicy" if is_dict else "MlpPolicy",
         training_env,
         policy_kwargs=dict({
             'activation_fn': activation_fn[args.critic_activation],
@@ -308,8 +339,23 @@ with wandb.init(
         qbias_eval_env = make_vec_env(env_id, n_envs=1, seed=seed, wrapper_class=wrapper_class)
     except Exception:
         # Use DummyVecEnv with the creator function directly
-        eval_env = DummyVecEnv([_make_eval_env])
-        qbias_eval_env = DummyVecEnv([_make_eval_env])
+        def _standardize_eval_env():
+            env = _make_eval_env()
+            try:
+                from gymnasium import spaces as gym_spaces
+                import gym as gym_old
+                if isinstance(env.action_space, gym_old.spaces.Box):
+                    old_as = env.action_space
+                    env.action_space = gym_spaces.Box(low=old_as.low, high=old_as.high, shape=old_as.shape, dtype=old_as.dtype)
+                if isinstance(env.observation_space, gym_old.spaces.Box):
+                    old_os = env.observation_space
+                    env.observation_space = gym_spaces.Box(low=old_os.low, high=old_os.high, shape=old_os.shape, dtype=old_os.dtype)
+            except:
+                pass
+            return env
+            
+        eval_env = DummyVecEnv([_standardize_eval_env])
+        qbias_eval_env = DummyVecEnv([_standardize_eval_env])
 
     # Ensure environments are wrapped with VecMonitor for evaluation
     if not is_vecenv_wrapped(eval_env, VecMonitor):

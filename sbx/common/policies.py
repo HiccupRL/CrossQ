@@ -4,7 +4,14 @@ from functools import partial
 
 import jax
 import numpy as np
-from gymnasium import spaces
+try:
+    import gymnasium as gym
+except ImportError:
+    import gym
+try:
+    from gymnasium import spaces
+except ImportError:
+    from gym import spaces
 from stable_baselines3.common.policies import BasePolicy
 from stable_baselines3.common.preprocessing import is_image_space, maybe_transpose
 from stable_baselines3.common.utils import is_vectorized_observation

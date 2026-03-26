@@ -4,7 +4,14 @@ import gymnasium as gym
 import jax
 import numpy as np
 import torch as th
-from gymnasium import spaces
+try:
+    import gymnasium as gym
+except ImportError:
+    import gym
+try:
+    from gymnasium import spaces
+except ImportError:
+    from gym import spaces
 from stable_baselines3.common.buffers import RolloutBuffer
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.on_policy_algorithm import OnPolicyAlgorithm
