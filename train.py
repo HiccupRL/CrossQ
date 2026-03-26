@@ -393,21 +393,68 @@ with wandb.init(
             # Provide an option to clear broken datasets
             dataset_path = training_env.unwrapped.dataset_filepath if hasattr(training_env.unwrapped, 'dataset_filepath') else None
             try:
-                dataset = training_env.unwrapped.get_dataset()
+                # We should use qlearning_dataset to get next_observations
+                import d4rl
+                dataset = d4rl.qlearning_dataset(training_env)
             except OSError as e:
                 if 'truncated file' in str(e) or 'Unable to synchronously open file' in str(e):
                     print(f"Warning: Dataset file corrupted. Attempting to redownload.")
                     if dataset_path and os.path.exists(dataset_path):
                         os.remove(dataset_path)
-                    dataset = training_env.unwrapped.get_dataset()
+                    import d4rl
+                    dataset = d4rl.qlearning_dataset(training_env)
                 else:
                     raise
-        except AttributeError:
-            dataset = d4rl.qlearning_dataset(training_env)
+            except Exception as e:
+                # Fallback to get_dataset and manually construct next_observations
+                try:
+                    raw_dataset = training_env.unwrapped.get_dataset()
+                    dataset = {
+                        'observations': raw_dataset['observations'][:-1],
+                        'next_observations': raw_dataset['observations'][1:],
+                        'actions': raw_dataset['actions'][:-1],
+                        'rewards': raw_dataset['rewards'][:-1],
+                        'terminals': raw_dataset['terminals'][:-1],
+                        'timeouts': raw_dataset['timeouts'][:-1] if 'timeouts' in raw_dataset else np.zeros_like(raw_dataset['terminals'][:-1])
+                    }
+                except:
+                    raise e
+        except (AttributeError, ImportError, NameError):
+            try:
+                import d4rl
+                dataset = d4rl.qlearning_dataset(training_env)
+            except (NameError, ImportError, AttributeError):
+                # D4RL is not available, try using minari
+                try:
+                    import minari
+                    # Convert standard D4RL env name to Minari dataset name
+                    # e.g., antmaze-umaze-v2 -> antmaze-umaze-v2 (or similar)
+                    print(f"[Info] Attempting to load Minari dataset for {env_id}")
+                    minari_dataset = minari.load_dataset(env_id)
+                    # Minari dataset structure is different, we need to extract transitions
+                    dataset = {
+                        'observations': [],
+                        'actions': [],
+                        'next_observations': [],
+                        'rewards': [],
+                        'terminals': [],
+                        'timeouts': []
+                    }
+                    for episode in minari_dataset.episodes:
+                        dataset['observations'].extend(episode.observations[:-1])
+                        dataset['next_observations'].extend(episode.observations[1:])
+                        dataset['actions'].extend(episode.actions)
+                        dataset['rewards'].extend(episode.rewards)
+                        dataset['terminals'].extend(episode.terminations)
+                        dataset['timeouts'].extend(episode.truncations)
+                    
+                    for k in dataset:
+                        dataset[k] = np.array(dataset[k])
+                except Exception as e:
+                    print(f"Failed to load dataset: {e}")
+                    raise
 
         # Replay buffer format:
-        # observations, actions, next_observations, rewards, terminals
-        N = dataset['rewards'].shape[0]
         # We need to make sure buffer size is large enough to hold the dataset
         if model.replay_buffer.buffer_size < N:
             print(f"[Warning] Replay buffer size ({model.replay_buffer.buffer_size}) is smaller than dataset size ({N}).")
