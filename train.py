@@ -389,7 +389,19 @@ with wandb.init(
         print(f"Starting offline pre-training for {offline_timesteps} steps...")
         # Populate replay buffer with offline dataset
         try:
-            dataset = training_env.unwrapped.get_dataset()
+            import os
+            # Provide an option to clear broken datasets
+            dataset_path = training_env.unwrapped.dataset_filepath if hasattr(training_env.unwrapped, 'dataset_filepath') else None
+            try:
+                dataset = training_env.unwrapped.get_dataset()
+            except OSError as e:
+                if 'truncated file' in str(e) or 'Unable to synchronously open file' in str(e):
+                    print(f"Warning: Dataset file corrupted. Attempting to redownload.")
+                    if dataset_path and os.path.exists(dataset_path):
+                        os.remove(dataset_path)
+                    dataset = training_env.unwrapped.get_dataset()
+                else:
+                    raise
         except AttributeError:
             dataset = d4rl.qlearning_dataset(training_env)
 
