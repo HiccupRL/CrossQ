@@ -63,6 +63,8 @@ parser.add_argument("-tau",               type=float, required=False, default=0.
 parser.add_argument("-utd",               type=int,   required=False, default=1, help="number of critic updates per env step")
 parser.add_argument("-total_timesteps",   type=int,   required=False, default=5e6, help="total number of training steps (online)")
 parser.add_argument("-offline_timesteps", type=int,   required=False, default=0, help="total number of offline pre-training steps")
+parser.add_argument("-eval_freq",         type=int, required=False, default=1000, help="how many offline steps between evaluations")
+parser.add_argument("-num_eval_episodes", type=int, required=False, default=50, help="number of episodes to evaluate")
 
 parser.add_argument("-bnstats_live_net",  type=int,   required=False, default=0,choices=[0,1], help="use bn running statistics from live network within the target network")
 
@@ -81,7 +83,9 @@ net_arch = {'pi': [256, 256], 'qf': [args.n_neurons, args.n_neurons]}
 
 total_timesteps = int(args.total_timesteps)
 offline_timesteps = int(args.offline_timesteps)
-eval_freq = max(5_000_000 // args.log_freq, 1)
+eval_freq = int(args.eval_freq)
+num_eval_episodes = int(args.num_eval_episodes)
+log_freq = int(args.log_freq)
 
 if 'dm_control' in args.env:
     total_timesteps = {
@@ -534,7 +538,7 @@ with wandb.init(
                 if model.tensorboard_log:
                     loggers.append(make_output_format("tensorboard", model.tensorboard_log))
             except Exception:
-                print("Tensorboard not installed, skipping tensorboard logging")
+                pass
                 
             model.set_logger(Logger("offline", loggers))
         except Exception as e:
@@ -545,19 +549,73 @@ with wandb.init(
                 print("Tensorboard not installed, logging to stdout instead")
                 model.set_logger(configure_logger(model.verbose, None, "offline"))
 
+        import time
+        from collections import defaultdict
+        
+        # We define a simple evaluation function similar to FQL
+        def evaluate(env, model, num_eval_episodes=10):
+            stats = defaultdict(list)
+            for _ in range(num_eval_episodes):
+                obs = env.reset()
+                # Handle tuple returned by gymnasium reset
+                if isinstance(obs, tuple):
+                    obs = obs[0]
+                done = False
+                episode_reward = 0.0
+                episode_length = 0
+                is_success = 0.0
+                while not done:
+                    # Deterministic action selection for evaluation
+                    action, _ = model.predict(obs, deterministic=True)
+                    step_result = env.step(action)
+                    if len(step_result) == 5:
+                        obs, reward, terminated, truncated, info = step_result
+                        done = terminated or truncated
+                    else:
+                        obs, reward, done, info = step_result
+                        
+                    episode_reward += reward
+                    episode_length += 1
+                    if info.get('is_success', 0.0) > 0:
+                        is_success = 1.0
+                        
+                stats['return'].append(episode_reward)
+                stats['length'].append(episode_length)
+                stats['success'].append(is_success)
+                
+            # Normalize score for D4RL
+            if hasattr(env.unwrapped, 'get_normalized_score'):
+                normalized_scores = [env.unwrapped.get_normalized_score(r) * 100.0 for r in stats['return']]
+                stats['normalized_score'] = normalized_scores
+                
+            return {k: np.mean(v) for k, v in stats.items()}
+
+        eval_env = gym.make(env_id)
+        if 'antmaze' in env_id:
+            eval_env = AntMazeSuccessWrapper(eval_env)
+
         for step in tqdm.tqdm(range(1, offline_timesteps + 1)):
             model.train(batch_size=batch_size, gradient_steps=gradient_steps)
             
-            # Use WandbCallback equivalent logic for offline steps
-            if step % args.log_freq == 0:
+            # Logging training metrics
+            if step % log_freq == 0:
                 model.logger.record("time/iterations", step)
                 model.logger.dump(step=step)
                 
-                # Perform evaluation explicitly if needed during offline training
-                if eval_freq > 0 and step % eval_freq == 0:
-                    for callback in callback_list.callbacks:
-                        if isinstance(callback, EvalCallback):
-                            callback.on_step()
+            # Evaluation similar to FQL
+            if step % eval_freq == 0:
+                eval_stats = evaluate(eval_env, model, num_eval_episodes=num_eval_episodes)
+                
+                # Log to SB3 logger
+                for k, v in eval_stats.items():
+                    model.logger.record(f"eval/{k}", v)
+                model.logger.record("time/iterations", step)
+                model.logger.dump(step=step)
+                
+                print(f"--- Offline Step {step} Eval ---")
+                for k, v in eval_stats.items():
+                    print(f"  {k}: {v:.3f}")
+                print("--------------------------------")
 
     print(f"Starting online training for {total_timesteps} steps...")
     model.learn(total_timesteps=total_timesteps, progress_bar=True, callback=callback_list)
