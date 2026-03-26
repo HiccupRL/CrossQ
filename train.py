@@ -61,7 +61,8 @@ parser.add_argument("-n_neurons",         type=int,   required=False, default=25
 parser.add_argument("-policy_delay",      type=int,   required=False, default=1, help="policy is updated after this many critic updates")
 parser.add_argument("-tau",               type=float, required=False, default=0.005, help="target network averaging")
 parser.add_argument("-utd",               type=int,   required=False, default=1, help="number of critic updates per env step")
-parser.add_argument("-total_timesteps",   type=int,   required=False, default=5e6, help="total number of training steps")
+parser.add_argument("-total_timesteps",   type=int,   required=False, default=5e6, help="total number of training steps (online)")
+parser.add_argument("-offline_timesteps", type=int,   required=False, default=0, help="total number of offline pre-training steps")
 
 parser.add_argument("-bnstats_live_net",  type=int,   required=False, default=0,choices=[0,1], help="use bn running statistics from live network within the target network")
 
@@ -79,6 +80,7 @@ policy_q_reduce_fn = jax.numpy.min
 net_arch = {'pi': [256, 256], 'qf': [args.n_neurons, args.n_neurons]}
 
 total_timesteps = int(args.total_timesteps)
+offline_timesteps = int(args.offline_timesteps)
 eval_freq = max(5_000_000 // args.log_freq, 1)
 
 if 'dm_control' in args.env:
@@ -94,6 +96,7 @@ if 'dm_control' in args.env:
 
 elif 'antmaze' in args.env:
     total_timesteps = 1_000_000
+    offline_timesteps = 1_000_000
     eval_freq = max(total_timesteps // args.log_freq, 1)
 
 td3_mode = False
@@ -214,18 +217,19 @@ with wandb.init(
 
     import gymnasium as gym
     def make_env_fallback(env_id, **kwargs):
+        import gymnasium as gym
         try:
             return gym.make(env_id, **kwargs)
-        except gym.error.NameNotFound:
+        except Exception as gym_err:
             try:
                 import gym as gym_old
                 try:
                     import d4rl
-                except ImportError:
-                    pass
+                except Exception as d4rl_err:
+                    print(f"[Warning] Failed to import d4rl: {d4rl_err}")
                 return gym_old.make(env_id, **kwargs)
             except Exception as e:
-                print(f"Error creating environment: {e}")
+                print(f"Error creating environment {env_id}: {e}")
                 raise
 
     training_env = make_env_fallback(env_id)
@@ -275,7 +279,7 @@ with wandb.init(
         tau=args.tau,
         gamma=0.99 if not args.env == 'Swimmer-v4' else 0.9999,
         verbose=0,
-        buffer_size=1_000_000,
+        buffer_size=max(1_000_000, offline_timesteps * 2),
         seed=seed,
         stats_window_size=1,  # don't smooth the episode return stats over time
         tensorboard_log=f"logs/{group + 'seed=' + str(seed) + '_time=' + str(experiment_time)}/",
@@ -334,4 +338,42 @@ with wandb.init(
         [eval_callback, q_bias_callback, WandbCallback(verbose=0,)] if args.eval_qbias else 
         [eval_callback, WandbCallback(verbose=0,)]
     )
+
+    if offline_timesteps > 0:
+        print(f"Starting offline pre-training for {offline_timesteps} steps...")
+        # Populate replay buffer with offline dataset
+        try:
+            dataset = training_env.unwrapped.get_dataset()
+        except AttributeError:
+            dataset = d4rl.qlearning_dataset(training_env)
+
+        # Replay buffer format:
+        # observations, actions, next_observations, rewards, terminals
+        N = dataset['rewards'].shape[0]
+        # We need to make sure buffer size is large enough to hold the dataset
+        if model.replay_buffer.buffer_size < N:
+            print(f"[Warning] Replay buffer size ({model.replay_buffer.buffer_size}) is smaller than dataset size ({N}).")
+
+        for i in range(min(N, model.replay_buffer.buffer_size)):
+            timeout = bool(dataset.get('timeouts', np.zeros(N))[i])
+            model.replay_buffer.add(
+                dataset['observations'][i][np.newaxis, ...],
+                dataset['next_observations'][i][np.newaxis, ...],
+                dataset['actions'][i][np.newaxis, ...],
+                np.array([dataset['rewards'][i]]),
+                np.array([dataset['terminals'][i]]),
+                [{'TimeLimit.truncated': timeout}]
+            )
+        
+        # We also need to set up logger
+        from stable_baselines3.common.utils import configure_logger
+        model.set_logger(configure_logger(model.verbose, model.tensorboard_log, "offline"))
+
+        import tqdm
+        batch_size = model.batch_size
+        gradient_steps = model.gradient_steps
+        for _ in tqdm.tqdm(range(offline_timesteps)):
+            model.train(batch_size=batch_size, gradient_steps=gradient_steps)
+
+    print(f"Starting online training for {total_timesteps} steps...")
     model.learn(total_timesteps=total_timesteps, progress_bar=True, callback=callback_list)
