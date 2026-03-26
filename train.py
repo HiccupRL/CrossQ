@@ -460,26 +460,75 @@ with wandb.init(
         if model.replay_buffer.buffer_size < N:
             print(f"[Warning] Replay buffer size ({model.replay_buffer.buffer_size}) is smaller than dataset size ({N}).")
 
-        for i in range(min(N, model.replay_buffer.buffer_size)):
-            timeout = bool(dataset.get('timeouts', np.zeros(N))[i])
-            model.replay_buffer.add(
-                dataset['observations'][i][np.newaxis, ...],
-                dataset['next_observations'][i][np.newaxis, ...],
-                dataset['actions'][i][np.newaxis, ...],
-                np.array([dataset['rewards'][i]]),
-                np.array([dataset['terminals'][i]]),
-                [{'TimeLimit.truncated': timeout}]
-            )
-        
-        # We also need to set up logger
-        from stable_baselines3.common.utils import configure_logger
-        model.set_logger(configure_logger(model.verbose, model.tensorboard_log, "offline"))
-
         import tqdm
         batch_size = model.batch_size
         gradient_steps = model.gradient_steps
-        for _ in tqdm.tqdm(range(offline_timesteps)):
+        
+        # Populate buffer is slow, let's add a progress bar
+        print(f"Populating replay buffer with {N} transitions...")
+        # Optimize buffer population by avoiding the slow `.add` loop and directly copying arrays
+        
+        # Calculate how many transitions to copy
+        n_transitions = min(N, model.replay_buffer.buffer_size)
+        
+        # Set pos and full flag
+        model.replay_buffer.pos = n_transitions % model.replay_buffer.buffer_size
+        model.replay_buffer.full = n_transitions >= model.replay_buffer.buffer_size
+        
+        # Directly assign arrays for maximum speed
+        model.replay_buffer.observations[:n_transitions] = dataset['observations'][:n_transitions]
+        model.replay_buffer.next_observations[:n_transitions] = dataset['next_observations'][:n_transitions]
+        model.replay_buffer.actions[:n_transitions] = dataset['actions'][:n_transitions]
+        model.replay_buffer.rewards[:n_transitions] = dataset['rewards'][:n_transitions, np.newaxis]
+        model.replay_buffer.dones[:n_transitions] = dataset['terminals'][:n_transitions, np.newaxis]
+        
+        if 'timeouts' in dataset:
+            model.replay_buffer.timeouts[:n_transitions] = dataset['timeouts'][:n_transitions, np.newaxis]
+            
+        print("Buffer populated. Starting offline gradient steps...")
+        # We also need to set up logger
+        from stable_baselines3.common.utils import configure_logger
+        from stable_baselines3.common.logger import Logger, make_output_format
+
+        try:
+            # Add wandb to the logger formats
+            loggers = [
+                make_output_format("stdout", "offline"),
+            ]
+            if args.wandb_mode != 'disabled':
+                # Custom wandb format for SB3
+                from wandb.integration.sb3 import WandbCallback
+                from stable_baselines3.common.logger import KVWriter
+                
+                class WandbOutputFormat(KVWriter):
+                    def write(self, key_values: Dict[str, Any], key_excluded: Dict[str, Union[str, Tuple[str, ...]]], step: int = 0) -> None:
+                        wandb.log(key_values, step=step)
+                    def close(self) -> None:
+                        pass
+                loggers.append(WandbOutputFormat())
+                
+            try:
+                if model.tensorboard_log:
+                    loggers.append(make_output_format("tensorboard", model.tensorboard_log))
+            except Exception:
+                print("Tensorboard not installed, skipping tensorboard logging")
+                
+            model.set_logger(Logger("offline", loggers))
+        except Exception as e:
+            print(f"Custom logger setup failed: {e}. Falling back to default.")
+            try:
+                model.set_logger(configure_logger(model.verbose, model.tensorboard_log, "offline"))
+            except ImportError:
+                print("Tensorboard not installed, logging to stdout instead")
+                model.set_logger(configure_logger(model.verbose, None, "offline"))
+
+        for step in tqdm.tqdm(range(offline_timesteps)):
             model.train(batch_size=batch_size, gradient_steps=gradient_steps)
+            
+            # Use WandbCallback equivalent logic for offline steps
+            if step % args.log_freq == 0:
+                model.logger.record("time/iterations", step)
+                model.logger.dump(step=step)
 
     print(f"Starting online training for {total_timesteps} steps...")
     model.learn(total_timesteps=total_timesteps, progress_bar=True, callback=callback_list)
