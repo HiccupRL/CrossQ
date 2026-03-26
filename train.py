@@ -181,6 +181,16 @@ with wandb.init(
         wandb_run.summary['SLURM_JOB_ID'] = os.environ.get('SLURM_JOB_ID')
 
     class AntMazeSuccessWrapper(gym.Wrapper):
+        def reset(self, **kwargs):
+            # Some old gym/D4RL environments don't support seed/options in reset
+            try:
+                return self.env.reset(**kwargs)
+            except TypeError as e:
+                if 'seed' in str(e) or 'options' in str(e):
+                    # Strip kwargs and try again
+                    return self.env.reset()
+                raise e
+                
         def step(self, action):
             result = self.env.step(action)
             if len(result) == 5:
@@ -556,7 +566,14 @@ with wandb.init(
         def evaluate(env, model, num_eval_episodes=10):
             stats = defaultdict(list)
             for _ in range(num_eval_episodes):
-                obs = env.reset()
+                try:
+                    obs = env.reset()
+                except TypeError:
+                    # Fallback for some wrapper structures that still pass kwargs
+                    try:
+                        obs = env.unwrapped.reset()
+                    except:
+                        raise
                 # Handle tuple returned by gymnasium reset
                 if isinstance(obs, tuple):
                     obs = obs[0]
