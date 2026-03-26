@@ -455,7 +455,8 @@ with wandb.init(
                     raise
 
         # Replay buffer format:
-        # We need to make sure buffer size is large enough to hold the dataset
+        # observations, actions, next_observations, rewards, terminals
+        N = dataset['rewards'].shape[0]
         if model.replay_buffer.buffer_size < N:
             print(f"[Warning] Replay buffer size ({model.replay_buffer.buffer_size}) is smaller than dataset size ({N}).")
 
