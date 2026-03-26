@@ -189,6 +189,10 @@ with wandb.init(
                 info['is_success'] = 1.0
             elif 'is_success' not in info:
                 info['is_success'] = 0.0
+                
+            # If we need to adjust reward for online training like FQL
+            if 'antmaze' in env_id and ('diverse' in env_id or 'play' in env_id or 'umaze' in env_id):
+                reward = reward - 1.0
 
             if len(result) == 5:
                 return obs, reward, terminated, truncated, info
@@ -234,21 +238,26 @@ with wandb.init(
 
     training_env = make_env_fallback(env_id)
 
-    # Standardize to gymnasium spaces if using old gym to bypass SB3 check
-    try:
-        from gymnasium import spaces as gym_spaces
-        import gym as gym_old
-        if isinstance(training_env.action_space, gym_old.spaces.Box):
-            old_as = training_env.action_space
-            training_env.action_space = gym_spaces.Box(low=old_as.low, high=old_as.high, shape=old_as.shape, dtype=old_as.dtype)
-        if isinstance(training_env.observation_space, gym_old.spaces.Box):
-            old_os = training_env.observation_space
-            training_env.observation_space = gym_spaces.Box(low=old_os.low, high=old_os.high, shape=old_os.shape, dtype=old_os.dtype)
-    except:
-        pass
-
     if 'antmaze' in env_id:
+        # Standardize to gymnasium spaces if using old gym to bypass SB3 check
+        try:
+            from gymnasium import spaces as gym_spaces
+            import gym as gym_old
+            if isinstance(training_env.action_space, gym_old.spaces.Box):
+                old_as = training_env.action_space
+                training_env.action_space = gym_spaces.Box(low=old_as.low, high=old_as.high, shape=old_as.shape, dtype=old_as.dtype)
+            if isinstance(training_env.observation_space, gym_old.spaces.Box):
+                old_os = training_env.observation_space
+                training_env.observation_space = gym_spaces.Box(low=old_os.low, high=old_os.high, shape=old_os.shape, dtype=old_os.dtype)
+        except:
+            pass
         training_env = AntMazeSuccessWrapper(training_env)
+        
+    # Re-extract obs_space after potential wrapper
+    if hasattr(training_env, 'observation_space'):
+        obs_space = training_env.observation_space
+    else:
+        obs_space = training_env.env.observation_space
 
     # Allow custom observation space adjustments
     if hasattr(training_env, 'observation_space'):
@@ -387,6 +396,14 @@ with wandb.init(
 
     if offline_timesteps > 0:
         print(f"Starting offline pre-training for {offline_timesteps} steps...")
+        
+        # Modify D4RL reward behavior if needed, to match FQL logic
+        if 'antmaze' in args.env and ('diverse' in args.env or 'play' in args.env or 'umaze' in args.env):
+            # The reference FQL code adjusts the reward: reward = reward - 1.0 for antmaze tasks
+            adjust_reward = True
+        else:
+            adjust_reward = False
+            
         # Populate replay buffer with offline dataset
         try:
             import os
@@ -475,12 +492,17 @@ with wandb.init(
         model.replay_buffer.pos = n_transitions % model.replay_buffer.buffer_size
         model.replay_buffer.full = n_transitions >= model.replay_buffer.buffer_size
         
+        # Adjust rewards if needed
+        rewards = dataset['rewards'][:n_transitions]
+        if adjust_reward:
+            rewards = rewards - 1.0
+        
         # Directly assign arrays for maximum speed
         # Stable-Baselines3 buffer expects shape (buffer_size, n_envs, dim)
         model.replay_buffer.observations[:n_transitions, 0, :] = dataset['observations'][:n_transitions]
         model.replay_buffer.next_observations[:n_transitions, 0, :] = dataset['next_observations'][:n_transitions]
         model.replay_buffer.actions[:n_transitions, 0, :] = dataset['actions'][:n_transitions]
-        model.replay_buffer.rewards[:n_transitions, 0] = dataset['rewards'][:n_transitions]
+        model.replay_buffer.rewards[:n_transitions, 0] = rewards
         model.replay_buffer.dones[:n_transitions, 0] = dataset['terminals'][:n_transitions]
         
         if 'timeouts' in dataset:
@@ -523,13 +545,19 @@ with wandb.init(
                 print("Tensorboard not installed, logging to stdout instead")
                 model.set_logger(configure_logger(model.verbose, None, "offline"))
 
-        for step in tqdm.tqdm(range(offline_timesteps)):
+        for step in tqdm.tqdm(range(1, offline_timesteps + 1)):
             model.train(batch_size=batch_size, gradient_steps=gradient_steps)
             
             # Use WandbCallback equivalent logic for offline steps
             if step % args.log_freq == 0:
                 model.logger.record("time/iterations", step)
                 model.logger.dump(step=step)
+                
+                # Perform evaluation explicitly if needed during offline training
+                if eval_freq > 0 and step % eval_freq == 0:
+                    for callback in callback_list.callbacks:
+                        if isinstance(callback, EvalCallback):
+                            callback.on_step()
 
     print(f"Starting online training for {total_timesteps} steps...")
     model.learn(total_timesteps=total_timesteps, progress_bar=True, callback=callback_list)
