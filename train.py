@@ -590,7 +590,7 @@ with wandb.init(
                 
             return {k: np.mean(v) for k, v in stats.items()}
 
-        eval_env = gym.make(env_id)
+        eval_env = make_env_fallback(env_id)
         if 'antmaze' in env_id:
             eval_env = AntMazeSuccessWrapper(eval_env)
 
