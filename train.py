@@ -24,6 +24,11 @@ from sbx.sac.utils import *
 import gymnasium as gym
 from shimmy.registration import DM_CONTROL_SUITE_ENVS
 
+try:
+    import d4rl
+except ImportError:
+    pass
+
 os.environ.setdefault('PYOPENGL_PLATFORM', 'glfw')
 # Configure MuJoCo to use EGL renderer
 os.environ.setdefault('MUJOCO_GL', 'glfw')
@@ -85,6 +90,10 @@ if 'dm_control' in args.env:
         'dm_control/fish-swim'        : 5_000_000,
         'dm_control/humanoid-stand'   : 5_000_000,
     }[args.env]
+    eval_freq = max(total_timesteps // args.log_freq, 1)
+
+elif 'antmaze' in args.env:
+    total_timesteps = 1_000_000
     eval_freq = max(total_timesteps // args.log_freq, 1)
 
 td3_mode = False
@@ -164,7 +173,28 @@ with wandb.init(
         print(f"SLURM_JOB_ID: {os.environ.get('SLURM_JOB_ID')}")
         wandb_run.summary['SLURM_JOB_ID'] = os.environ.get('SLURM_JOB_ID')
 
+    class AntMazeSuccessWrapper(gym.Wrapper):
+        def step(self, action):
+            result = super().step(action)
+            if len(result) == 5:
+                obs, reward, terminated, truncated, info = result
+            else:
+                obs, reward, terminated, info = result
+                truncated = False
+
+            if reward > 0.0:
+                info['is_success'] = 1.0
+            elif 'is_success' not in info:
+                info['is_success'] = 0.0
+
+            if len(result) == 5:
+                return obs, reward, terminated, truncated, info
+            else:
+                return obs, reward, terminated, info
+
     training_env = gym.make(args.env)
+    if 'antmaze' in args.env:
+        training_env = AntMazeSuccessWrapper(training_env)
 
     if args.env == 'dm_control/humanoid-stand':
         training_env.observation_space['head_height'] = gym.spaces.Box(-np.inf, np.inf, (1,))
@@ -215,8 +245,9 @@ with wandb.init(
     os.makedirs(qbias_log_dir, exist_ok=True)
 
     # Create callback that evaluates agent
+    wrapper_class = AntMazeSuccessWrapper if 'antmaze' in args.env else None
     eval_callback = EvalCallback(
-        make_vec_env(args.env, n_envs=1, seed=seed),
+        make_vec_env(args.env, n_envs=1, seed=seed, wrapper_class=wrapper_class),
         jax_random_key_for_seeds=args.seed,
         best_model_save_path=None,
         log_path=eval_log_dir, eval_freq=eval_freq,
@@ -225,7 +256,7 @@ with wandb.init(
 
     # Callback that evaluates q bias according to the REDQ paper.
     q_bias_callback = CriticBiasCallback(
-        make_vec_env(args.env, n_envs=1, seed=seed), 
+        make_vec_env(args.env, n_envs=1, seed=seed, wrapper_class=wrapper_class), 
         jax_random_key_for_seeds=args.seed,
         best_model_save_path=None,
         log_path=qbias_log_dir, eval_freq=eval_freq,
