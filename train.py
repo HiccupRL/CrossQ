@@ -103,8 +103,10 @@ if 'dm_control' in args.env:
     eval_freq = max(total_timesteps // args.log_freq, 1)
 
 elif 'antmaze' in args.env:
-    total_timesteps = 1_000_000
-    offline_timesteps = 1_000_000
+    if args.total_timesteps == 5e6:
+        total_timesteps = 1_000_000
+    if args.offline_timesteps == 0:
+        offline_timesteps = 10_000 # Changed for testing online transition
     eval_freq = max(total_timesteps // args.log_freq, 1)
 
 td3_mode = False
@@ -184,6 +186,46 @@ with wandb.init(
         print(f"SLURM_JOB_ID: {os.environ.get('SLURM_JOB_ID')}")
         wandb_run.summary['SLURM_JOB_ID'] = os.environ.get('SLURM_JOB_ID')
 
+    class GymToGymnasiumWrapper(gym.Wrapper):
+        def __init__(self, env):
+            super().__init__(env)
+            # Standardize observation and action spaces
+            try:
+                from gymnasium import spaces as gym_spaces
+                import gym as gym_old
+                if isinstance(self.env.action_space, gym_old.spaces.Box):
+                    old_as = self.env.action_space
+                    self.action_space = gym_spaces.Box(low=old_as.low, high=old_as.high, shape=old_as.shape, dtype=old_as.dtype)
+                if isinstance(self.env.observation_space, gym_old.spaces.Box):
+                    old_os = self.env.observation_space
+                    self.observation_space = gym_spaces.Box(low=old_os.low, high=old_os.high, shape=old_os.shape, dtype=old_os.dtype)
+            except Exception:
+                pass
+
+        def reset(self, **kwargs):
+            try:
+                result = self.env.reset(**kwargs)
+            except TypeError as e:
+                if 'seed' in str(e) or 'options' in str(e):
+                    if 'seed' in kwargs and hasattr(self.env, 'seed'):
+                        self.env.seed(kwargs['seed'])
+                    result = self.env.reset()
+                else:
+                    raise e
+            if isinstance(result, tuple) and len(result) == 2 and isinstance(result[1], dict):
+                return result
+            return result, {}
+
+        def step(self, action):
+            result = self.env.step(action)
+            if len(result) == 5:
+                return result
+            elif len(result) == 4:
+                obs, reward, done, info = result
+                return obs, reward, done, False, info
+            else:
+                return result
+
     class AntMazeSuccessWrapper(gym.Wrapper):
         def reset(self, **kwargs):
             # Some old gym/D4RL environments don't support seed/options in reset
@@ -212,10 +254,7 @@ with wandb.init(
             if 'antmaze' in env_id and ('diverse' in env_id or 'play' in env_id or 'umaze' in env_id):
                 reward = reward - 1.0
 
-            if len(result) == 5:
-                return obs, reward, terminated, truncated, info
-            else:
-                return obs, reward, terminated, info
+            return obs, reward, terminated, truncated, info
 
     try:
         import d4rl
@@ -241,7 +280,8 @@ with wandb.init(
     def make_env_fallback(env_id, **kwargs):
         import gymnasium as gym
         try:
-            return gym.make(env_id, **kwargs)
+            env = gym.make(env_id, **kwargs)
+            return GymToGymnasiumWrapper(env)
         except Exception as gym_err:
             try:
                 import gym as gym_old
@@ -249,7 +289,8 @@ with wandb.init(
                     import d4rl
                 except Exception as d4rl_err:
                     print(f"[Warning] Failed to import d4rl: {d4rl_err}")
-                return gym_old.make(env_id, **kwargs)
+                env = gym_old.make(env_id, **kwargs)
+                return GymToGymnasiumWrapper(env)
             except Exception as e:
                 print(f"Error creating environment {env_id}: {e}")
                 raise
@@ -654,4 +695,4 @@ with wandb.init(
         # Update the model's num_timesteps to start from offline_timesteps
         model.num_timesteps = offline_timesteps
         
-    model.learn(total_timesteps=total_timesteps, progress_bar=True, callback=callback_list, reset_num_timesteps=False)
+    model.learn(total_timesteps=offline_timesteps + total_timesteps, progress_bar=True, callback=callback_list, reset_num_timesteps=False)
