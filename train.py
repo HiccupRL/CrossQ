@@ -476,14 +476,15 @@ with wandb.init(
         model.replay_buffer.full = n_transitions >= model.replay_buffer.buffer_size
         
         # Directly assign arrays for maximum speed
-        model.replay_buffer.observations[:n_transitions] = dataset['observations'][:n_transitions]
-        model.replay_buffer.next_observations[:n_transitions] = dataset['next_observations'][:n_transitions]
-        model.replay_buffer.actions[:n_transitions] = dataset['actions'][:n_transitions]
-        model.replay_buffer.rewards[:n_transitions] = dataset['rewards'][:n_transitions, np.newaxis]
-        model.replay_buffer.dones[:n_transitions] = dataset['terminals'][:n_transitions, np.newaxis]
+        # Stable-Baselines3 buffer expects shape (buffer_size, n_envs, dim)
+        model.replay_buffer.observations[:n_transitions, 0, :] = dataset['observations'][:n_transitions]
+        model.replay_buffer.next_observations[:n_transitions, 0, :] = dataset['next_observations'][:n_transitions]
+        model.replay_buffer.actions[:n_transitions, 0, :] = dataset['actions'][:n_transitions]
+        model.replay_buffer.rewards[:n_transitions, 0] = dataset['rewards'][:n_transitions]
+        model.replay_buffer.dones[:n_transitions, 0] = dataset['terminals'][:n_transitions]
         
         if 'timeouts' in dataset:
-            model.replay_buffer.timeouts[:n_transitions] = dataset['timeouts'][:n_transitions, np.newaxis]
+            model.replay_buffer.timeouts[:n_transitions, 0] = dataset['timeouts'][:n_transitions]
             
         print("Buffer populated. Starting offline gradient steps...")
         # We also need to set up logger
