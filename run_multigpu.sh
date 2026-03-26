@@ -26,11 +26,13 @@ wait_for_available_gpus() {
 
 AGENT_PATH="train.py"
 RUN_GROUP="crossQ_exp"
-SEEDS=(0 1)
-ENV_NAMES=("Humanoid-v3" "Humanoid-v4") 
+SEEDS=(0 1 2 3)
+ENV_NAMES=("antmaze-umaze-diverse-v2" "antmaze-medium-diverse-v2" "antmaze-large-play-v2" "antmaze-large-diverse-v2") 
 ALGO="crossq"
 WANDB_MODE="online"
-WANDB_PROJECT="crossq"
+WANDB_PROJECT="crossq-ant"
+OFFLINE_STEPS=1000000
+ONLINE_STEPS=1000000
 
 if [ $# -ge 1 ]; then LOG_DIR="$1"; else LOG_DIR="logs_crossq"; fi
 mkdir -p ${LOG_DIR}
@@ -45,6 +47,8 @@ generate_command() {
 -algo ${ALGO} \
 -env ${env_name} \
 -seed ${seed} \
+-offline_timesteps ${OFFLINE_STEPS} \
+-total_timesteps ${ONLINE_STEPS} \
 -wandb_mode ${WANDB_MODE} \
 -wandb_project ${WANDB_PROJECT} \
 > ${log_name} 2>&1"
