@@ -7,6 +7,10 @@ import warnings
 import wandb
 from wandb.integration.sb3 import WandbCallback
 
+# Filter out annoying deprecation warnings from old gym/d4rl
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
+
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -412,9 +416,10 @@ with wandb.init(
         print(f"Starting offline pre-training for {offline_timesteps} steps...")
         
         # Modify D4RL reward behavior if needed, to match FQL logic
-        if 'antmaze' in args.env and ('diverse' in args.env or 'play' in args.env or 'umaze' in args.env):
+        if 'antmaze' in env_id and ('diverse' in env_id or 'play' in env_id or 'umaze' in env_id):
             # The reference FQL code adjusts the reward: reward = reward - 1.0 for antmaze tasks
             adjust_reward = True
+            print("FQL adjustment: Subtracting 1.0 from offline rewards.")
         else:
             adjust_reward = False
             
@@ -527,10 +532,11 @@ with wandb.init(
         from stable_baselines3.common.utils import configure_logger
         from stable_baselines3.common.logger import Logger, make_output_format
 
+        # We will use a unified logger for both offline and online to keep wandb step continuous
         try:
             # Add wandb to the logger formats
             loggers = [
-                make_output_format("stdout", "offline"),
+                make_output_format("stdout", "logs"),
             ]
             if args.wandb_mode != 'disabled':
                 # Custom wandb format for SB3
@@ -550,14 +556,17 @@ with wandb.init(
             except Exception:
                 pass
                 
-            model.set_logger(Logger("offline", loggers))
+            unified_logger = Logger("logs", loggers)
+            model.set_logger(unified_logger)
         except Exception as e:
             print(f"Custom logger setup failed: {e}. Falling back to default.")
             try:
-                model.set_logger(configure_logger(model.verbose, model.tensorboard_log, "offline"))
+                unified_logger = configure_logger(model.verbose, model.tensorboard_log, "logs")
+                model.set_logger(unified_logger)
             except ImportError:
                 print("Tensorboard not installed, logging to stdout instead")
-                model.set_logger(configure_logger(model.verbose, None, "offline"))
+                unified_logger = configure_logger(model.verbose, None, "logs")
+                model.set_logger(unified_logger)
 
         import time
         from collections import defaultdict
@@ -617,6 +626,7 @@ with wandb.init(
             # Logging training metrics
             if step % log_freq == 0:
                 model.logger.record("time/iterations", step)
+                model.logger.record("time/total_timesteps", step)
                 model.logger.dump(step=step)
                 
             # Evaluation similar to FQL
@@ -626,7 +636,9 @@ with wandb.init(
                 # Log to SB3 logger
                 for k, v in eval_stats.items():
                     model.logger.record(f"eval/{k}", v)
+                # Keep steps monotonic between offline and online
                 model.logger.record("time/iterations", step)
+                model.logger.record("time/total_timesteps", step)
                 model.logger.dump(step=step)
                 
                 print(f"--- Offline Step {step} Eval ---")
@@ -635,4 +647,11 @@ with wandb.init(
                 print("--------------------------------")
 
     print(f"Starting online training for {total_timesteps} steps...")
-    model.learn(total_timesteps=total_timesteps, progress_bar=True, callback=callback_list)
+    
+    # If unified_logger was created in offline phase, reuse it so steps don't reset
+    if 'unified_logger' in locals():
+        model.set_logger(unified_logger)
+        # Update the model's num_timesteps to start from offline_timesteps
+        model.num_timesteps = offline_timesteps
+        
+    model.learn(total_timesteps=total_timesteps, progress_bar=True, callback=callback_list, reset_num_timesteps=False)
