@@ -173,7 +173,7 @@ with wandb.init(
     name=f"{args.env}_seed={seed}",
     group=group,
     tags=[],
-    sync_tensorboard=True,
+    sync_tensorboard=False,
     config=args_dict,
     settings=wandb.Settings(start_method="fork") if is_slurm_job() else None,
     mode=args.wandb_mode
