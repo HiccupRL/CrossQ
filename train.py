@@ -48,6 +48,7 @@ parser.add_argument("-log_freq",    type=int, required=False, default=300, help=
 
 parser.add_argument('-wandb_entity', type=str, required=False, default=None, help='your wandb entity name')
 parser.add_argument('-wandb_project', type=str, required=False, default='crossQ', help='wandb project name')
+parser.add_argument('-wandb_group', type=str, required=False, default=None, help='wandb group name')
 parser.add_argument("-wandb_mode",    type=str, required=False, default='disabled', choices=['disabled', 'online'], help="enable/disable wandb logging")
 parser.add_argument("-eval_qbias",    type=int, required=False, default=0, choices=[0,1], help="enable/diasble q bias evaluation (expensive; experiments will run much slower)")
 
@@ -120,7 +121,7 @@ if args.algo == 'droq':
     args.adam_b2 = 0.999  # adam default
     args.policy_delay = 20
     args.utd = 20
-    group = f'DroQ_{args.env}_bn({args.bn})_ln{(args.ln)}_xqstyle({args.crossq_style}/{args.tau})_utd({args.utd}/{args.policy_delay})_Adam({args.adam_b1})_Q({net_arch["qf"][0]})'
+    if not args.wandb_group: group = f'DroQ_{args.env}_bn({args.bn})_ln{(args.ln)}_xqstyle({args.crossq_style}/{args.tau})_utd({args.utd}/{args.policy_delay})_Adam({args.adam_b1})_Q({net_arch["qf"][0]})'
 
 elif args.algo == 'redq':
     policy_q_reduce_fn = jax.numpy.mean
@@ -129,7 +130,7 @@ elif args.algo == 'redq':
     args.adam_b2 = 0.999  # adam default
     args.policy_delay = 20
     args.utd = 20
-    group = f'REDQ_{args.env}_bn({args.bn})_ln{(args.ln)}_xqstyle({args.crossq_style}/{args.tau})_utd({args.utd}/{args.policy_delay})_Adam({args.adam_b1})_Q({net_arch["qf"][0]})'
+    if not args.wandb_group: group = f'REDQ_{args.env}_bn({args.bn})_ln{(args.ln)}_xqstyle({args.crossq_style}/{args.tau})_utd({args.utd}/{args.policy_delay})_Adam({args.adam_b1})_Q({net_arch["qf"][0]})'
 
 elif args.algo == 'td3':
     # With the right hyperparameters, this here can run all the above algorithms
@@ -138,7 +139,7 @@ elif args.algo == 'td3':
     layer_norm = args.ln
     if args.dropout: 
         dropout_rate = 0.01
-    group = f'TD3_{args.env}_bn({args.bn}/{args.bn_momentum}/{args.bn_mode})_ln{(args.ln)}_xq({args.crossq_style}/{args.tau})_utd({args.utd}/{args.policy_delay})_A{args.adam_b1}_Q({net_arch["qf"][0]})_l{args.lr}'
+    if not args.wandb_group: group = f'TD3_{args.env}_bn({args.bn}/{args.bn_momentum}/{args.bn_mode})_ln{(args.ln)}_xq({args.crossq_style}/{args.tau})_utd({args.utd}/{args.policy_delay})_A{args.adam_b1}_Q({net_arch["qf"][0]})_l{args.lr}'
 
 elif args.algo == 'sac':
     # With the right hyperparameters, this here can run all the above algorithms
@@ -146,7 +147,7 @@ elif args.algo == 'sac':
     layer_norm = args.ln
     if args.dropout: 
         dropout_rate = 0.01
-    group = f'SAC_{args.env}_bn({args.bn}/{args.bn_momentum}/{args.bn_mode})_ln{(args.ln)}_xq({args.crossq_style}/{args.tau})_utd({args.utd}/{args.policy_delay})_A{args.adam_b1}_Q({net_arch["qf"][0]})_l{args.lr}'
+    if not args.wandb_group: group = f'SAC_{args.env}_bn({args.bn}/{args.bn_momentum}/{args.bn_mode})_ln{(args.ln)}_xq({args.crossq_style}/{args.tau})_utd({args.utd}/{args.policy_delay})_A{args.adam_b1}_Q({net_arch["qf"][0]})_l{args.lr}'
 
 elif args.algo == 'crossq':
     args.adam_b1 = 0.5
@@ -158,7 +159,7 @@ elif args.algo == 'crossq':
     args.bn_momentum = 0.99
     args.crossq_style = True        # with a joint forward pass
     args.tau = 1.0                  # without target networks
-    group = f'CrossQ_{args.env}'
+    if not args.wandb_group: group = f'CrossQ_{args.env}'
 
 else:
     raise NotImplemented
@@ -168,6 +169,9 @@ args_dict.update({
     "dropout_rate": dropout_rate,
     "layer_norm": layer_norm
 })
+
+if args.wandb_group:
+    group = args.wandb_group
 
 with wandb.init(
     entity=args.wandb_entity,
@@ -378,7 +382,7 @@ with wandb.init(
         tau=args.tau,
         gamma=0.99 if not args.env == 'Swimmer-v4' else 0.9999,
         verbose=0,
-        buffer_size=max(1_000_000, offline_timesteps * 2),
+        buffer_size=max(1_000_000, offline_timesteps + total_timesteps),
         seed=seed,
         stats_window_size=1,  # don't smooth the episode return stats over time
         tensorboard_log=f"logs/{group + 'seed=' + str(seed) + '_time=' + str(experiment_time)}/",
@@ -676,7 +680,11 @@ with wandb.init(
                 
                 # Log to SB3 logger
                 for k, v in eval_stats.items():
-                    model.logger.record(f"eval/{k}", v)
+                    # For metrics like success, also log it as success_rate so it matches online evaluation metric names
+                    if k == 'success':
+                        model.logger.record("eval/success_rate", v)
+                    else:
+                        model.logger.record(f"eval/{k}", v)
                 # Keep steps monotonic between offline and online
                 model.logger.record("time/iterations", step)
                 model.logger.record("time/total_timesteps", step)
@@ -689,10 +697,51 @@ with wandb.init(
 
     print(f"Starting online training for {total_timesteps} steps...")
     
+    # --- Inject 50/50 offline/online sampling logic for online finetuning ---
+    if offline_timesteps > 0 and 'n_transitions' in locals() and n_transitions > 0:
+        import types
+        import numpy as np
+        
+        offline_size = n_transitions
+        
+        def mixed_sample(self, batch_size, env=None):
+            current_pos = self.pos
+            is_full = self.full
+            
+            # Calculate how many online transitions are available
+            if is_full:
+                online_size = self.buffer_size - offline_size
+            else:
+                online_size = current_pos - offline_size
+                
+            if online_size <= 0:
+                # No online data yet, sample 100% from offline
+                batch_inds = np.random.randint(0, offline_size, size=batch_size)
+                return self._get_samples(batch_inds, env=env)
+                
+            # Sample 50% from offline, 50% from online
+            offline_batch_size = batch_size // 2
+            online_batch_size = batch_size - offline_batch_size
+            
+            offline_inds = np.random.randint(0, offline_size, size=offline_batch_size)
+            
+            if is_full:
+                online_inds = np.random.randint(offline_size, self.buffer_size, size=online_batch_size)
+            else:
+                online_inds = np.random.randint(offline_size, current_pos, size=online_batch_size)
+                
+            batch_inds = np.concatenate([offline_inds, online_inds])
+            # Optional: shuffle the indices
+            np.random.shuffle(batch_inds)
+            
+            return self._get_samples(batch_inds, env=env)
+            
+        model.replay_buffer.sample = types.MethodType(mixed_sample, model.replay_buffer)
+
     # If unified_logger was created in offline phase, reuse it so steps don't reset
     if 'unified_logger' in locals():
         model.set_logger(unified_logger)
         # Update the model's num_timesteps to start from offline_timesteps
         model.num_timesteps = offline_timesteps
         
-    model.learn(total_timesteps=offline_timesteps + total_timesteps, progress_bar=True, callback=callback_list, reset_num_timesteps=False)
+    model.learn(total_timesteps=total_timesteps, progress_bar=True, callback=callback_list, reset_num_timesteps=False)
