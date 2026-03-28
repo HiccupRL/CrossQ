@@ -702,6 +702,10 @@ with wandb.init(
         import types
         import numpy as np
         
+        # SB3 learning sets replay_buffer.pos to 0 on first reset if not handled!
+        # We need to forcefully maintain the offline position
+        model.replay_buffer.pos = n_transitions
+        
         offline_size = n_transitions
         
         def mixed_sample(self, batch_size, env=None):
@@ -714,8 +718,11 @@ with wandb.init(
             else:
                 online_size = current_pos - offline_size
                 
-            if online_size <= 0:
-                # No online data yet, sample 100% from offline
+            # IMPORTANT: Wait until we have enough online data before doing 50/50 sampling
+            # Otherwise we sample the same few online transitions hundreds of times, 
+            # crashing the Batch Normalization variance and destroying the policy!
+            if online_size < 5000:
+                # Fallback to 100% offline sampling during the online "warmup" phase
                 batch_inds = np.random.randint(0, offline_size, size=batch_size)
                 return self._get_samples(batch_inds, env=env)
                 
@@ -728,7 +735,12 @@ with wandb.init(
             if is_full:
                 online_inds = np.random.randint(offline_size, self.buffer_size, size=online_batch_size)
             else:
-                online_inds = np.random.randint(offline_size, current_pos, size=online_batch_size)
+                # IMPORTANT FIX: prevent low > high error when online_size is very small
+                if current_pos <= offline_size:
+                    # fallback if no online data actually collected yet
+                    online_inds = np.random.randint(0, offline_size, size=online_batch_size)
+                else:
+                    online_inds = np.random.randint(offline_size, current_pos, size=online_batch_size)
                 
             batch_inds = np.concatenate([offline_inds, online_inds])
             # Optional: shuffle the indices

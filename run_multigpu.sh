@@ -25,7 +25,7 @@ wait_for_available_gpus() {
 }
 
 AGENT_PATH="train.py"
-RUN_GROUP="antmaze0327"
+RUN_GROUP="antmaze0328"
 SEEDS=(0 1 2 3 4 5 6 7)
 ENV_NAMES=("antmaze-umaze-diverse-v2" "antmaze-medium-diverse-v2" "antmaze-large-play-v2" "antmaze-large-diverse-v2") 
 ALGO="crossq"
