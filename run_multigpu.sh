@@ -25,9 +25,9 @@ wait_for_available_gpus() {
 }
 
 AGENT_PATH="train.py"
-RUN_GROUP="antmaze0328"
+RUN_GROUP="antmaze0328-new"
 SEEDS=(0 1 2 3 4 5 6 7)
-ENV_NAMES=("antmaze-umaze-diverse-v2" "antmaze-medium-diverse-v2" "antmaze-large-play-v2" "antmaze-large-diverse-v2") 
+ENV_NAMES=("antmaze-umaze-v2" "antmaze-umaze-diverse-v2" "antmaze-medium-play-v2" "antmaze-medium-diverse-v2" "antmaze-large-play-v2" "antmaze-large-diverse-v2") 
 ALGO="crossq"
 WANDB_MODE="online"
 WANDB_PROJECT="crossq-ant"
